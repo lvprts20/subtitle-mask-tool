@@ -1,4 +1,4 @@
-name: Build Windows EXE
+name: Build Windows EXE (EasyOCR + CPU PyTorch)
 
 on:
   workflow_dispatch:    # 可以在网页手动触发
@@ -19,10 +19,13 @@ jobs:
         with:
           python-version: '3.10'
 
-      - name: Install dependencies
+      - name: Install dependencies (CPU-only PyTorch)
         run: |
           pip install --upgrade pip
-          pip install pyinstaller pyqt5 easyocr opencv-python numpy
+          # 安装 CPU 版 PyTorch，避免 GPU DLL 报错
+          pip install torch==2.0.1+cpu torchvision==0.15.2+cpu torchaudio==2.0.2+cpu -f https://download.pytorch.org/whl/torch_stable.html
+          # 安装 EasyOCR 和其他依赖
+          pip install easyocr pyqt5 opencv-python numpy pyinstaller
 
       - name: Build EXE
         run: |
