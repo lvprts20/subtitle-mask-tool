@@ -1,4 +1,4 @@
-name: Build Windows EXE (EasyOCR + CPU PyTorch)
+name: Build Windows EXE (Web Video Subtitle Mask)
 
 on:
   workflow_dispatch:    # 可以在网页手动触发
@@ -25,7 +25,7 @@ jobs:
           # 安装 CPU 版 PyTorch，避免 GPU DLL 报错
           pip install torch==2.0.1+cpu torchvision==0.15.2+cpu torchaudio==2.0.2+cpu -f https://download.pytorch.org/whl/torch_stable.html
           # 安装 EasyOCR 和其他依赖
-          pip install easyocr pyqt5 opencv-python numpy pyinstaller
+          pip install easyocr pyqt5 opencv-python numpy pygetwindow pyinstaller
 
       - name: Build EXE
         run: |
