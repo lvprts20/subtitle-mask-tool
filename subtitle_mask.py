@@ -2,6 +2,7 @@ import sys, re, threading, time
 import cv2
 import numpy as np
 import easyocr
+import pygetwindow as gw
 from PyQt5 import QtWidgets, QtCore, QtGui
 
 def has_chinese(text):
@@ -17,6 +18,7 @@ class Overlay(QtWidgets.QWidget):
         self.block_size = block_size
         self.target_rect = None
         self.current_rect = None
+        self.browser_hwnd = None
 
     def set_target_rect(self, rect):
         self.target_rect = rect
@@ -25,9 +27,8 @@ class Overlay(QtWidgets.QWidget):
         self.update()
 
     def paintEvent(self, event):
-        if not self.current_rect:
+        if not self.current_rect or not self.browser_hwnd:
             return
-        # 平滑过渡
         cur = self.current_rect
         tgt = self.target_rect
         if tgt:
@@ -39,7 +40,8 @@ class Overlay(QtWidgets.QWidget):
 
         painter = QtGui.QPainter(self)
         screen = QtWidgets.QApplication.primaryScreen()
-        pixmap = screen.grabWindow(0, self.current_rect.x(), self.current_rect.y(),
+        pixmap = screen.grabWindow(self.browser_hwnd,
+                                   self.current_rect.x(), self.current_rect.y(),
                                    self.current_rect.width(), self.current_rect.height())
         image = pixmap.toImage()
         ptr = image.bits()
@@ -47,7 +49,6 @@ class Overlay(QtWidgets.QWidget):
         arr = np.array(ptr).reshape(image.height(), image.width(), 4)
         arr = cv2.cvtColor(arr, cv2.COLOR_BGRA2BGR)
 
-        # 像素化处理
         h, w = arr.shape[:2]
         temp = cv2.resize(arr, (max(1, w // self.block_size), max(1, h // self.block_size)),
                           interpolation=cv2.INTER_LINEAR)
@@ -59,15 +60,19 @@ class Overlay(QtWidgets.QWidget):
 class SubtitleMaskApp(QtWidgets.QWidget):
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("自动字幕遮罩（中文，EasyOCR）")
+        self.setWindowTitle("网页视频字幕遮罩（中文）")
         self.overlay = Overlay()
-        self.ocr = easyocr.Reader(['ch_sim','en'])  # 支持中文简体和英文
+        self.ocr = easyocr.Reader(['ch_sim','en'])
         self.running = False
+        self.browser_hwnd = None
 
         self.block_slider = QtWidgets.QSlider(QtCore.Qt.Horizontal)
         self.block_slider.setRange(5, 50)
         self.block_slider.setValue(15)
         self.block_slider.valueChanged.connect(self.change_block)
+
+        self.site_input = QtWidgets.QLineEdit()
+        self.site_input.setPlaceholderText("请输入网站或浏览器标题关键字，例如 Netflix 或 Edge")
 
         start_btn = QtWidgets.QPushButton("启动自动遮罩")
         stop_btn = QtWidgets.QPushButton("关闭遮罩")
@@ -78,6 +83,8 @@ class SubtitleMaskApp(QtWidgets.QWidget):
         layout = QtWidgets.QVBoxLayout()
         layout.addWidget(QtWidgets.QLabel("像素化强度"))
         layout.addWidget(self.block_slider)
+        layout.addWidget(QtWidgets.QLabel("浏览器窗口关键字"))
+        layout.addWidget(self.site_input)
         layout.addWidget(start_btn)
         layout.addWidget(stop_btn)
         self.setLayout(layout)
@@ -86,6 +93,17 @@ class SubtitleMaskApp(QtWidgets.QWidget):
         self.overlay.block_size = val
 
     def start(self):
+        keyword = self.site_input.text().strip()
+        if not keyword:
+            print("请输入关键字")
+            return
+        windows = gw.getWindowsWithTitle(keyword)
+        if not windows:
+            print(f"未找到包含关键字 {keyword} 的窗口")
+            return
+        self.browser_hwnd = windows[0]._hWnd
+        self.overlay.browser_hwnd = self.browser_hwnd
+
         self.running = True
         self.overlay.show()
         threading.Thread(target=self.detect_loop, daemon=True).start()
@@ -98,10 +116,10 @@ class SubtitleMaskApp(QtWidgets.QWidget):
         screen = QtWidgets.QApplication.primaryScreen()
         last_rect = None
         while self.running:
-            geo = screen.geometry()
-            h, w = geo.height(), geo.width()
-            roi_h = int(h * 0.3)  # 底部30%
-            pixmap = screen.grabWindow(0, 0, h - roi_h, w, roi_h)
+            win = gw.getWindowsWithTitle(self.site_input.text().strip())[0]
+            w, h = win.width, win.height
+            roi_h = int(h * 0.3)
+            pixmap = screen.grabWindow(self.browser_hwnd, 0, h - roi_h, w, roi_h)
             image = pixmap.toImage()
             ptr = image.bits()
             ptr.setsize(image.byteCount())
@@ -114,15 +132,11 @@ class SubtitleMaskApp(QtWidgets.QWidget):
                 x_min, y_min, x_max, y_max = None, None, None, None
                 for (bbox, text, score) in result:
                     if score > 0.6 and has_chinese(text):
-                        (x1,y1),(x2,y2),(x3,y3),(x4,y4) = bbox
-                        x1,x2,x3,x4 = int(x1),int(x2),int(x3),int(x4)
-                        y1,y2,y3,y4 = int(y1),int(y2),int(y3),int(y4)
-                        x_left = min(x1,x2,x3,x4)
-                        x_right = max(x1,x2,x3,x4)
-                        y_top = min(y1,y2,y3,y4)
-                        y_bottom = max(y1,y2,y3,y4)
-                        # 转换到全屏坐标
-                        x, y, w_box, h_box = x_left, h - roi_h + y_top, x_right - x_left, y_bottom - y_top
+                        xs = [int(pt[0]) for pt in bbox]
+                        ys = [int(pt[1]) for pt in bbox]
+                        x1, x2 = min(xs), max(xs)
+                        y1, y2 = min(ys), max(ys)
+                        x, y, w_box, h_box = x1, h - roi_h + y1, x2 - x1, y2 - y1
                         if x_min is None:
                             x_min, y_min, x_max, y_max = x, y, x+w_box, y+h_box
                         else:
@@ -132,17 +146,18 @@ class SubtitleMaskApp(QtWidgets.QWidget):
                             y_max = max(y_max, y+h_box)
                 if x_min is not None:
                     pad = 10
-                    rect = QtCore.QRect(x_min-pad, y_min-pad, (x_max-x_min)+2*pad, (y_max-y_min)+2*pad)
+                    rect = QtCore.QRect(x_min-pad, y_min-pad,
+                                        (x_max-x_min)+2*pad, (y_max-y_min)+2*pad)
 
             if rect:
                 last_rect = rect
             elif last_rect:
-                rect = last_rect  # 使用缓存结果
+                rect = last_rect
 
             if rect:
                 self.overlay.set_target_rect(rect)
 
-            time.sleep(0.4)  # 每秒检测约 2–3 次
+            time.sleep(0.4)
             self.overlay.update()
 
 if __name__ == "__main__":
